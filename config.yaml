@@ -1,0 +1,23 @@
+name: "digital_price_ble"
+description: "Update BLE Digital Pricetag"
+version: "1.0.0"
+slug: "digital_price_ble"
+host_dbus: true
+arch:
+  - aarch64
+  - amd64
+  - armhf
+  - armv7
+  - i386
+map:
+  - config:rw
+options:
+  image_filename: "your_image.png"  # Update this with the actual image file name
+  mac_address: "FF:FF:11:22:33:44"  # Update this with the target BLE device's MAC address
+schema:
+  image_filename: str
+  mac_address: str
+devices:
+  - /dev/bus/usb
+  - /dev/ttyAMA0
+  - /var/run/dbus/system_bus_socket
