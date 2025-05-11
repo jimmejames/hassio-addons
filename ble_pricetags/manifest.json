@@ -1,0 +1,10 @@
+{
+  "domain": "ble_pricetags",
+  "name": "BLE PriceTags",
+  "version": "0.2",
+  "documentation": "https://github.com/borazslo/ble_pricetags",
+  "dependencies": [],
+  "codeowners": ["@borazslo","@jimmejames"],
+  "requirements": ["bleak"],
+  "config_flow": true
+}

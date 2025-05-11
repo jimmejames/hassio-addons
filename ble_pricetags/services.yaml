@@ -1,0 +1,23 @@
+log_message:
+  name: "Message Log"
+  description: "Log a message and the device UUID when the service is called."
+  fields:
+    message:
+      description: "The message to log."
+      example: "lefutottam"
+      selector:
+        text: {}      
+
+upload_image:
+  name: "Upload image to BLE device"
+  description: "Upload an image to a device and log the event."
+  target:
+    device: {}
+  fields:
+    image_file:
+      description: "The path to the image file to upload."
+      example: "/config/www/example_image.jpg"
+      required: true
+      default: "/config/images/image.png"
+      selector:
+        text: {}
