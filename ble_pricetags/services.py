@@ -72,8 +72,12 @@ async def async_register_services(hass: HomeAssistant, domain: str):
             # So, finally let's connect to the device
             global prepared_image
             prepared_image = verify_and_scale_image(image_file)
-
-            await connect_ble(mac_address)
+            success, message = await connect_ble(mac_address)
+            if not success:
+                _LOGGER.error(f"Failed to connect to device {device_uuid} with MAC address {mac_address}: {message}")
+                raise HomeAssistantError(message)
+                return
+            
             _LOGGER.info(f"Uploading image ({image_file}) to device {device_uuid} with MAC address {mac_address}...")
             await upload_image()
 
@@ -183,57 +187,102 @@ async def send_command(cmd_hex):
         data = bytes.fromhex(cmd_hex)
         await ble_client.write_gatt_char(CHARACTERISTIC_CMD_UUID, data)
 
-async def connect_ble(target_mac_addr):
+async def scan_and_find_device(target_mac_addr, timeout=10.0):
+    """
+    Perform a Bluetooth scan and find a device with the specified MAC address.
     
+    Args:
+        target_mac_addr (str): The MAC address of the target device.
+        timeout (float): The timeout for the scan in seconds.
+
+    Returns:
+        target_device (BleakScanner.Device): The found device object, or None if not found.
+    """
+    try:
+        devices = await asyncio.wait_for(BleakScanner.discover(timeout=timeout), timeout=timeout + 10.0)
+        _LOGGER.debug(f"Scan complete, found {len(devices)} devices.")
+    except asyncio.TimeoutError:
+        _LOGGER.error("BLE scan timed out.")
+        return None
+
+    if not devices:
+        _LOGGER.debug("No devices found.")
+        return None
+
+    _LOGGER.debug(f"Found {len(devices)} BLE devices:")
+    for device, advertisement_data in devices:
+        _LOGGER.debug(f"  - {device.name or 'Unknown'} ({device.address}) RSSI: {advertisement_data.rssi}")
+
+    # Search for the target device by MAC address
+    for d in devices:
+        if d.address.upper() == target_mac_addr.upper():
+            _LOGGER.debug(f"Found target device: {d.name or 'Unknown'} ({d.address})")
+            return d
+
+    _LOGGER.warning(f"Target device with MAC address {target_mac_addr} not found.")
+    return None
+
+async def connect_ble(target_mac_addr):
+    """
+    Attempt to connect to a BLE device with the specified MAC address.
+
+    Args:
+        target_mac_addr (str): The MAC address of the target device.
+
+    Returns:
+        (bool, str): A tuple indicating success or failure and a message.
+    """
+    _LOGGER.info(f"Starting looking for and connection to {target_mac_addr}...")    
     global ble_client
     max_retries = 10
+    
+    # 1. Search for the target device
     retry_count = 0
-    while True:
+    target_device = None
+
+    while retry_count < max_retries:
+        retry_count += 1
         try:
-            retry_count += 1
-            if retry_count > max_retries:
-                _LOGGER.error("Max retries reached. Exiting...")
-                break
-
-            _LOGGER.info(f"Starting connection to {target_mac_addr}...")
-            _LOGGER.debug(f"Starting BLE scan for {target_mac_addr}...")
-            devices = await asyncio.wait_for(BleakScanner.discover(timeout=5.0), timeout=8.0)
-            _LOGGER.debug(f"Scan complete, found {len(devices)} devices.")  # Log the number of devices found
-
-            if not devices:
-                _LOGGER.debug("No devices found.")
-            else:
-                _LOGGER.debug(f"Found {len(devices)} BLE devices:")
-                for d in devices:
-                    _LOGGER.debug(f"  - {d.name or 'Unknown'} ({d.address}) RSSI: {d.rssi}")
-
-            target_device = None
-            for d in devices:
-                if d.address.upper() == target_mac_addr.upper():
-                    target_device = d
-                    break
-
+            _LOGGER.debug(f"Scanning for target device (Attempt {retry_count}/{max_retries})...")
+            target_device = await scan_and_find_device(target_mac_addr)
             if target_device:
-                _LOGGER.debug(f"Found target device: {target_device.name or 'Unknown'} ({target_device.address})")
-
-                ble_client = BleakClient(target_device)
-                try:
-                    _LOGGER.debug(f"Attempting to connect to {target_device.name or 'Unknown'}...")
-                    await ble_client.connect()
-                    _LOGGER.debug(f"Connected to {target_device.name or 'Unknown'} ({target_device.address})")
-                except Exception as e:
-                    _LOGGER.error(f"Connection failed: {e}")
-                    continue
-
-                await ble_client.start_notify(CHARACTERISTIC_CMD_UUID, notification_handler)
-                _LOGGER.info(f"Started notifications for {target_device.name or 'Unknown'} ({target_device.address})")
-                return  # Successfully connected, exit the loop
-
+                _LOGGER.info(f"Target device found: {target_device.name or 'Unknown'} ({target_device.address})")
+                break
             else:
-                _LOGGER.warning("Target device not found. Waiting 3 seconds before retrying...")
-                await asyncio.sleep(3)
-
+                _LOGGER.warning(f"Target device not found. Retrying... (Attempt {retry_count}/{max_retries})")
+                await asyncio.sleep(2)
         except Exception as e:
-            _LOGGER.error("Scan failed with exception:")
-            _LOGGER.error(str(e))
-            await asyncio.sleep(5)
+            _LOGGER.error(f"Error during scanning: {str(e)}")
+            _LOGGER.debug("Detailed exception info:", exc_info=True)
+
+    if not target_device:
+        _LOGGER.error(f"Failed to find target device {target_mac_addr} after {max_retries} attempts.")
+        return False, f"Failed to find target device after {max_retries} attempts."
+
+
+    # 2. Connecting to the targeted device
+    retry_count = 0
+    while retry_count < max_retries:
+        retry_count += 1
+        ble_client = BleakClient(target_device)
+        try:
+            _LOGGER.debug(f"Attempting to connect to {target_device.name or 'Unknown'} (Attempt {retry_count}/{max_retries})...")
+            await asyncio.wait_for(ble_client.connect(), timeout=15.0)
+            _LOGGER.info(f"Connected to {target_device.name or 'Unknown'} ({target_device.address})")
+
+            # Start notifications or perform other operations here
+            await ble_client.start_notify(CHARACTERISTIC_CMD_UUID, notification_handler)
+            _LOGGER.info(f"Started notifications for {target_device.name or 'Unknown'} ({target_device.address})")
+            return True, "Connected successfully"
+
+        except asyncio.TimeoutError:
+            _LOGGER.warning(f"Connection to {target_device.address} timed out. Retrying... (Attempt {retry_count}/{max_retries})")
+            await asyncio.sleep(2)
+        except Exception as e:
+            _LOGGER.error(f"Connection failed: {str(e)}")
+            _LOGGER.debug("Detailed exception info:", exc_info=True)
+        
+    _LOGGER.error(f"Failed to connect to target device {target_mac_addr} after {max_retries} attempts.")
+    return False, f"Failed to connect to target device after {max_retries} attempts."
+
+  
